@@ -1,9 +1,12 @@
-import xml.etree.ElementTree as ET
-
 import functions_framework
 from flask import jsonify
+from lxml import etree
 
 VALID_VERSIONS = {"4.0"}
+NAMES_SPACES = {
+    "cfdi": "http://www.sat.gob.mx/cfd/4",
+    "tfd": "http://www.sat.gob.mx/TimbreFiscalDigital",
+}
 
 
 @functions_framework.http
@@ -18,7 +21,7 @@ def read_cfdi(request):
 
     try:
         content = file.read()
-        root = ET.fromstring(content)
+        root = etree.fromstring(content)
 
         missingAttrib = validate_cfdi_structure(root)
 
@@ -30,19 +33,15 @@ def read_cfdi(request):
         if root.attrib["Version"] not in VALID_VERSIONS:
             return jsonify({"error": "Invalid CFDI file"}), 400
 
-        uuid = root.find(
-            ".//tfd:TimbreFiscalDigital",
-            namespaces={"tfd": "http://www.sat.gob.mx/TimbreFiscalDigital"},
-        ).attrib["UUID"]
-        emisor = _parse_taxpayer(
-            root.find(
-                ".//cfdi:Emisor", namespaces={"cfdi": "http://www.sat.gob.mx/cfd/4"}
-            )
-        )
+        uuid_node = root.xpath("//tfd:TimbreFiscalDigital", namespaces=NAMES_SPACES)
+
+        if not uuid_node:
+            return jsonify({"error": "Missing TimbreFiscalDigital"}), 400
+
+        uuid = uuid_node[0].attrib["UUID"]
+        emisor = _parse_taxpayer(root.xpath(".//cfdi:Emisor", namespaces=NAMES_SPACES))
         receptor = _parse_taxpayer(
-            root.find(
-                ".//cfdi:Receptor", namespaces={"cfdi": "http://www.sat.gob.mx/cfd/4"}
-            )
+            root.xpath(".//cfdi:Receptor", namespaces=NAMES_SPACES)
         )
         conceptos, impuestos = _parse_concepts_and_taxes(root)
 
@@ -62,7 +61,7 @@ def read_cfdi(request):
             "conceptos": conceptos,
             "impuestos": impuestos,
         }
-    except ET.ParseError:
+    except etree.XMLSyntaxError:
         return jsonify({"error": "Malformed XML file"}), 400
     except Exception as e:
         return jsonify({"error": f"Failed to parse XML: {str(e)}"}), 500
@@ -73,9 +72,11 @@ def validate_cfdi_structure(root):
     return [attr for attr in required_attrs if attr not in root.attrib]
 
 
-def _parse_taxpayer(element):
-    if element is None:
+def _parse_taxpayer(root):
+    if root is None:
         return None
+
+    element = root[0]
 
     return {
         "rfc": element.attrib["Rfc"],
@@ -90,11 +91,11 @@ def _parse_concepts_and_taxes(root):
     conceptos = []
     impuestos = []
 
-    datConceptos = root.findall(
+    datConceptos = root.xpath(
         ".//cfdi:Conceptos/cfdi:Concepto",
         namespaces={"cfdi": "http://www.sat.gob.mx/cfd/4"},
     )
-    datImpuestos = root.findall(
+    datImpuestos = root.xpath(
         ".//cfdi:Impuestos/cfdi:Traslados/cfdi:Traslado",
         namespaces={"cfdi": "http://www.sat.gob.mx/cfd/4"},
     )
