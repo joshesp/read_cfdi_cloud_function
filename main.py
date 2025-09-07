@@ -11,10 +11,25 @@ NAMES_SPACES = {
 
 @functions_framework.http
 def read_cfdi(request):
-    if "file" not in request.files:
+    ## Set CORS headers for the preflight request
+    if request.method == "OPTIONS":
+        ## Allows GET requests from any origin with the Content-Type
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "3600",
+        }
+
+        return ("", 204, headers)
+
+    # Set CORS headers for the main request
+    headers = {"Access-Control-Allow-Origin": "*"}
+
+    if "upfile" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
-    file = request.files["file"]
+    file = request.files["upfile"]
 
     if "xml" not in file.content_type:
         return jsonify({"error": file.content_type}), 400
@@ -45,22 +60,34 @@ def read_cfdi(request):
         )
         conceptos, impuestos = _parse_concepts_and_taxes(root)
 
-        return {
-            "version": root.attrib["Version"],
-            "fecha": root.attrib["Fecha"],
-            "formaPago": root.attrib.get("FormaPago"),
-            "metodoPago": root.attrib.get("MetodoPago"),
-            "subTotal": float(root.attrib["SubTotal"]),
-            "descuento": float(root.attrib.get("Descuento", 0.0)),
-            "moneda": root.attrib["Moneda"],
-            "total": float(root.attrib["Total"]),
-            "tipoDeComprobante": root.attrib["TipoDeComprobante"],
-            "uuid": uuid,
-            "emisor": emisor,
-            "receptor": receptor,
-            "conceptos": conceptos,
-            "impuestos": impuestos,
-        }
+        impuestos_node = root.xpath("./cfdi:Impuestos", namespaces=NAMES_SPACES)
+        total_impuesto = 0.0
+        if impuestos_node:
+            total_impuesto = _safe_float(
+                impuestos_node[0].attrib.get("TotalImpuestosTrasladados")
+            )
+
+        return (
+            {
+                "version": root.attrib["Version"],
+                "fecha": root.attrib["Fecha"],
+                "formaPago": root.attrib.get("FormaPago") or "00",
+                "metodoPago": root.attrib.get("MetodoPago"),
+                "subTotal": float(root.attrib["SubTotal"]),
+                "totalImpuesto": total_impuesto,
+                "descuento": float(root.attrib.get("Descuento", 0.0)),
+                "moneda": root.attrib["Moneda"],
+                "total": float(root.attrib["Total"]),
+                "tipoDeComprobante": root.attrib["TipoDeComprobante"],
+                "uuid": uuid,
+                "emisor": emisor,
+                "receptor": receptor,
+                "conceptos": conceptos,
+                "impuestos": impuestos,
+            },
+            200,
+            headers,
+        )
     except etree.XMLSyntaxError:
         return jsonify({"error": "Malformed XML file"}), 400
     except Exception as e:
@@ -96,7 +123,7 @@ def _parse_concepts_and_taxes(root):
         namespaces={"cfdi": "http://www.sat.gob.mx/cfd/4"},
     )
     datImpuestos = root.xpath(
-        ".//cfdi:Impuestos/cfdi:Traslados/cfdi:Traslado",
+        "./cfdi:Impuestos/cfdi:Traslados/cfdi:Traslado",
         namespaces={"cfdi": "http://www.sat.gob.mx/cfd/4"},
     )
 
